@@ -12,9 +12,10 @@
 
 #define FALSE  -1  
 #define TRUE   0  
-#define IP "172.16.0.223"
+//#define IP "172.16.0.223"
+#define IP "121.40.90.86"
 #define PORT "8000"
-#define PATH "/qcloud/tanzheng/api.php"
+#define PATH "qcloud/tanzheng/api.php?action=reportingData"
 
 int UART0_Open(char* port)  
 {  
@@ -262,6 +263,7 @@ static int create_and_connect(const char *addr, const char *port, int type, stru
 			s = connect(listen_sock, rp->ai_addr, rp->ai_addrlen);
 			if (s == 0) {
 				/* We managed to connect successfully! */
+				printf("socket connect success.\n");
 				break;
 			}
 		} else if(SOCK_DGRAM == type) {
@@ -282,14 +284,84 @@ static int create_and_connect(const char *addr, const char *port, int type, stru
 	return listen_sock;
 }
 
+char* build_http_header(char* ip,char* port, char* path, char * data, int len)
+{
+	//time_t now;
+	//char timebuf[100];
+	char head[128];
+	//now = time(0);
+	//strftime( timebuf, sizeof(timebuf), RFC1123FMT, gmtime( &now ) );
+
+	char *http_header = NULL;
+	http_header = malloc(512 + len);
+
+	if(!strcmp(port, "80")) {
+		snprintf(head, sizeof(head), "POST http://%s/%s HTTP/1.1\r\n", ip, path);
+	} else {
+		snprintf(head, sizeof(head), "POST http://%s:%s/%s HTTP/1.1\r\n", ip, port, path);
+	}
+	
+	snprintf(http_header, 512 + len,"%s\
+Accept: */*\r\n\
+Accept-Language: zh-cn\r\n\
+User-Agent: Mozilla/4.0 (compatible; MSIE 5.01; Windows NT 5.0)\r\n\
+Host: %s\r\n\
+Referer: http://%s\r\n\
+Content-Type: application/x-www-form-urlencoded\r\n\
+Pragma: no-cache\r\n\
+Connection: Keep-Alive\r\n\
+Content-Length: %d\r\n\r\n%s\n",head,ip,ip,len,data);
+
+	return http_header;
+}
+
 static int http_send_to_server(char *ip, char *port, char *path, char *buf)
 {
 	int fd, r, len;
+	int cnt = 0;
+	char *sendbuf;
+	char *recvbuf;
 	len = strlen(buf);
+	sendbuf = build_http_header(ip, port, path, buf, len);
+	len = strlen(sendbuf);
+	printf("Final Data: \n%s\n", sendbuf);
 	//if(verbose) LOGI("send data:%s", sendbuf);
 	fd = create_and_connect(ip, port, SOCK_STREAM, NULL);
-
-	r = send(fd, buf,len, 0);
+	//r = send(fd, sendbuf, len, 0);
+	while (1) {
+		r = send(fd, sendbuf,len, 0);
+		printf("r = %d\n",r);
+		if(r < 0)
+		{
+			printf("Send Failed!\n");
+			break;
+			// if (errno == EINTR)
+			// {
+			// 	continue;
+			// } else {
+			// 	printf("Send Failed!\n");
+			// 	if(++cnt > 3) {
+			// 		break;
+			// 	} else {
+			// 		close(fd);
+			// 		fd = create_and_connect(ip,port, SOCK_STREAM, NULL);
+			// 		continue;
+			// 	}
+			// }
+		}
+		else if(r > 0 && r < len)
+		{
+			printf("Send partly!\n");
+			sendbuf += r;
+			len -= r;
+			continue;
+		}
+		else
+		{
+			printf("Send Finished!\n");
+			break;
+		}
+	}
 	//shutdown(fd, 2);
 	close(fd);
 	//free(pt);
@@ -316,7 +388,6 @@ static void get_sn(char *buf)
 
 int itoa_x(int val, char buf[2])
 {
-	char *p = buf;
 	int t;
 	t = val%16;
 	if (t > 9) {  
@@ -333,6 +404,21 @@ int itoa_x(int val, char buf[2])
     return 0;  
 } 
 
+char* form_json_data(char *sn, char *mac, char *rssi)
+{
+	char *data_json = NULL;
+	data_json = malloc(512);
+	int j;
+	j = sprintf(data_json,"list=[ { \"bat\": \"0\", \"sn\": \"");
+	j += sprintf(data_json+j,"%s",sn);
+	j += sprintf(data_json+j,"\", \"mac\": \"");
+	j += sprintf(data_json+j,"%s",mac);
+	j += sprintf(data_json+j,"\", \"type\": \"3\", \"rssi\": \"");
+	j += sprintf(data_json+j,"%s",rssi); 
+	j += sprintf(data_json+j,"\", \"stimestamp\": \"1499999999\" } ]");
+	return data_json;
+}
+
 int main(int argc, char **argv)  
 {  
 	int fd; 
@@ -342,16 +428,16 @@ int main(int argc, char **argv)
 	int index = 0;
 	int location = 0;
 	int finish = 0;
-	int i,j;
+	int i;
 	unsigned char rcv_buf[32];         
 	unsigned char print_buf[256];
-	unsigned char mac[7];      
-	unsigned char data_json[256];   
+	char *data_json = NULL;
+	data_json = calloc(1,512); 
 	char sn_val[17];
 	char mac_val[13];
 	char rssi_val[3]; 
 	char send_buf[20]="tiger john";  
-	
+	get_sn(sn_val);
 	if(argc != 3)  
 	{  
 		printf("Usage: %s /dev/ttySn 0(send data)/1 (receive data) \n",argv[0]);  
@@ -383,7 +469,6 @@ int main(int argc, char **argv)
 	}  
 	else  
 	{  
-		get_sn(sn_val);
 		while (1)
 		{   
 			len = UART0_Recv(fd, rcv_buf, sizeof(rcv_buf));
@@ -396,15 +481,19 @@ int main(int argc, char **argv)
 				}
 				printf("finish = %d\n", finish);
 
-				if(finish == 1){
+				if(finish == 1)
+				{
 					memcpy(&print_buf[location],rcv_buf,index+2);
 					location = location + index + 2;
 					//check data
 					length = print_buf[6];
-					if(length + 10 != location){
-						printf("Receive Fault!\n");
+					if(length + 10 != location)
+					{
+						printf("FAILURE!!\n");
 					}
-					else{
+					else
+					{
+						printf("SUCCESS!!\n");
 						//print data
 						printf("location = %d\n", location);
 						for(i=0; i < location; i++){
@@ -412,19 +501,12 @@ int main(int argc, char **argv)
 						}
 						printf("\n");
 
-						memset(data_json,0,sizeof(data_json));
-						j = sprintf(data_json,"[{\"sn\":\"");
-						j += sprintf(data_json+j,"%s",sn_val);
-
 						printf("mac: ");
 						for(i=0; i < 6; i++) {
 							printf("%3.2x",print_buf[i]); 
 							itoa_x(print_buf[i],&mac_val[i+i]);
 						}
 						mac_val[12] = '\0';
-
-						j += sprintf(data_json+j,"\", \"mac\":\"");
-						j += sprintf(data_json+j,"%s",mac_val);
 
 						printf("\n");
 						printf("length: ");
@@ -440,15 +522,13 @@ int main(int argc, char **argv)
 						printf("%3.2x",print_buf[7+length]); 
 						itoa_x(print_buf[7+length],rssi_val);
 						rssi_val[2]='\0';
-						j += sprintf(data_json+j,"\", \"rssi\": \"");
-						j += sprintf(data_json+j,"%s",rssi_val); 
-						j += sprintf(data_json+j,"\" }]");
-						
 						printf("\n");
+
+						data_json=form_json_data(sn_val, mac_val, rssi_val);
+						printf("data_json: %s\n", data_json);
+						http_send_to_server(IP, PORT, PATH, data_json);
+						memset(data_json,0,sizeof(data_json));
 					}
-					
-					printf("data_json: %s\n", data_json);
-					http_send_to_server(IP, PORT, PATH, data_json);
 
 					memset(print_buf,0,sizeof(print_buf));
 					memcpy(print_buf,&rcv_buf[index+2],len-index-2);//copy the rest data
