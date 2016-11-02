@@ -4,3 +4,7 @@
   2 threads, 1 thread read usb data, the other send data.
   with input: address, cache size, interval.
   use linked list to store data.
+  broken.
+  
+2.1: 
+  1 thread, working.
